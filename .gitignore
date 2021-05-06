@@ -1,9 +1,4 @@
 node_modules
-public/**/*.css*
-public/**/structure.js*
-public/**/revelation.js*
-*bundle*.js
-*bundle*.js.map
-client/globbed-*.js
-stats.html
-.reify-cache*
+*.rss
+feed-items.txt
+markdown-posts.txt

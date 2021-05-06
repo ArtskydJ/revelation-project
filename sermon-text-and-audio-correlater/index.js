@@ -1,56 +1,39 @@
-require(`reify`)
+/*
+How to use this...
+1. Choose a sermon series. E.g. Life of David
+2. Download the sermonaudio.rss file for that series
+3. Download the dcc.rss file for that series (This might help: https://www.josephdykstra.com/dcc-podcast-feeds)
+	cd ...revelation-project/sermon-text-and-audio-correlater
+	curl "" > dcc.rss
+4. Make sure the constants below are set correctly for the series
+*/
+
+const kc_series_path = `KayserCommentary/Markdown/Web/Sermons/LifeOfDavid`
+const dcc_rss_url = `http://www.dominioncovenantchurch.com/?podcast&series=12`
+const sermonaudio_rss_url = `https://rss.sermonaudio.com/rss_search.rss?seriesonly=true&sourceid=dominioncovenant&keyword=Life+of+David`
+
+const validatePost = post => post.metadata.published
+	// && !/GraphicsCharts/.test(post.filename)
+
+
+// Don't change below this
+// ------------------------------------------------------
 
 require(`loud-rejection`)()
 
 const Butler = require(`noddity-butler`)
 const level = require(`level-mem`)
+const Retrieval = require(`./noddity-flat-fs-retrieval.js`)
 const denodeify = require(`then-denodeify`)
-const Retrieval = require(`noddity-fs-retrieval`)
+const path = require(`path`)
+const fs = require(`fs/promises`)
 const sh = require(`shell-tag`)
 
 const compareDateAsc = require(`date-fns/compare_asc`)
-const formatDate = require(`date-fns/format`)
-const isSunday = require(`date-fns/is_sunday`)
-const addDays = require(`date-fns/add_days`)
+const formatDate = require('date-fns/format')
 
-const getSermonAudioData = require(`./sermon-rss`)
-const passageToRange = require(`./passage-to-range`)
-const createPodcastXmlFile = require(`./compile-podcast`)
 
-const guaranteeRange = require(`../client/lib/structure/guarantee-range`).default
-
-const gitToken = process.env.KAYSER_COMMENTARY_BOT_TOKEN
-
-const specialCases = (...cases) => cases.reduce((found, [ test, result ]) => found || (test() && result), null)
-
-const kcRepoUrl = gitToken
-	? `https://kayser-commentary-bot:${ gitToken }@github.com/KayserCommentaryOrg/KayserCommentary.git`
-	: `git@github.com:KayserCommentaryOrg/KayserCommentary.git`
-
-const botRevelationRepoUrl = gitToken
-	? `https://kayser-commentary-bot:${ gitToken }@github.com/KayserCommentaryOrg/revelation-project.git`
-	: null
-
-console.log(
-	sh`
-		cd /tmp
-		rm -rf KayserCommentary || echo 'whatever'
-		echo "cloning..."
-		git clone -b master --depth 1 ${ kcRepoUrl }
-		echo "done cloning"
-		cd KayserCommentary/ci/deploy
-		npm i
-		cd ../../
-		echo "done installing"
-		node ci/deploy/bin.js Markdown/Web/ ./content /tmp/whatever
-	`
-)
-
-console.log(`Done checking out and processing...`)
-
-// const retrieval = new Retrieval(path.join(__dirname, `../../KayserCommentary/content`))
-const retrieval = new Retrieval(`/tmp/KayserCommentary/content`)
-
+const retrieval = Retrieval(path.join(__dirname, `..`, `..`, kc_series_path))
 const butler = Butler(retrieval, level(`server`), {
 	parallelPostRequests: 10,
 })
@@ -58,155 +41,52 @@ const butler = Butler(retrieval, level(`server`), {
 const getPosts = denodeify(butler.getPosts)
 
 async function main() {
-	const [
-		posts, sermonAudioData,
-	] = await Promise.all([
-		getPosts(), getSermonAudioData(),
-	])
+	const padAmount = 70
+	const get_rss_feed = require('./get-rss-feed.js')
+	const dccRssData = await get_rss_feed(dcc_rss_url)
+	const sermonaudioRssData = await get_rss_feed(sermonaudio_rss_url)
+	const posts = await getPosts()
+	console.log(`got source files`)
 
-	const dateToIdAndTitle = sermonAudioData.reduce((map, { id, title, dateString, enclosure }) => {
-		map[dateString] = { id, title, enclosure }
-		return map
-	}, Object.create(null))
+	const rssTitles = dccRssData
+		.map(({ id, title, dateString, enclosure }) => formatDate(dateString, 'YYYY-MM') + ' ' + normalize(title)) // .padEnd(padAmount) + dateString
+		.reverse()
 
-	const revelationPosts = posts.filter(
-		post => post.metadata.published
-			&& /^Sermons\/New Testament\/Revelation\/Revelation/.test(post.filename)
-			&& !/GraphicsCharts/.test(post.filename)
-			&& !/Revelation timeline/.test(post.filename)
-			&& !/WarManual.md$/.test(post.filename)
-	).map(({ filename, metadata }) => {
-		const { passage, date, title } = metadata
-		return {
-			title,
-			passage,
-			filename,
-			date,
-		}
-	}).sort((postA, postB) => compareDateAsc(postA.date, postB.date))
-
-	const audioIdsSeenAlready = new Set()
-
-	const postsAndAudio = revelationPosts.map(({ filename, passage, date, title }) => {
-		const isoDateString = formatDate(nextSunday(date), `YYYY-MM-DD`)
-		const audioId = dateToIdAndTitle[isoDateString] && dateToIdAndTitle[isoDateString].id
-
-		if (audioId) {
-			if (audioIdsSeenAlready.has(audioId)) {
-				throw new Error(`Can't add sermon audioId ${ audioId } to the sermon list twice!, ${ isoDateString }`)
+	const validPostTitles = posts
+		.filter(validatePost)
+		.map(({ filename, metadata }) => {
+			const { passage, date, title } = metadata
+			return {
+				title,
+				passage,
+				filename,
+				date,
 			}
-			audioIdsSeenAlready.add(audioId)
-		}
+		})
+		.sort((postA, postB) => compareDateAsc(postA.date, postB.date))
+		.map(({ title, filename, date }) => formatDate(date, 'YYYY-MM') + ' ' + normalize(title || `NO TITLE FOR FILE: "${filename}"`))
 
-		const range = specialCases([
-			() => isoDateString === `2015-04-26`,
-			[ [ 21, 1 ], [ 21, 1 ] ],
-		], [
-			() => /\/Revelation Themes\//.test(filename),
-			[ [ 1, 1 ], [ 22, 21 ] ],
-		]) || passageToRange(passage)
+	await fs.writeFile('markdown-posts.txt', validPostTitles.map(normalize).join('\n'), { encoding: 'utf-8' })
+	await fs.writeFile('feed-items.txt', rssTitles.map(normalize).join('\n'), { encoding: 'utf-8' })
+	console.log(`wrote output files`)
 
-		if (!range) {
-			throw new Error(`Unable to construct a range out of "${ passage }" in ${ filename }`)
-		}
-
-		return {
-			title,
-			passage,
-			range,
-			filename,
-			date: isoDateString,
-			audioId: dateToIdAndTitle[isoDateString] && dateToIdAndTitle[isoDateString].id,
-			enclosure: dateToIdAndTitle[isoDateString] && dateToIdAndTitle[isoDateString].enclosure,
-		}
-	})
-
-	createPodcastXmlFile(postsAndAudio)
-
-	save(
-		guaranteeRangeSections(
-			trimToPropertiesThatNeedToBeDownloadedToClient(
-				postsAndAudio
-			)
-		)
-	)
-
-	sh`
-		rm -rf /tmp/KayserCommentary/content
-	`
-
-	const podcastFeedChanged = getLinesAdded(`../public/static/podcast.xml`) > 1
-
-	if (podcastFeedChanged) {
-		console.log(`Committing public/static/podcast.xml`)
-		sh`git add ../public/static/podcast.xml`
-	}
-
-	const sermonJsonChanged = getLinesAdded(`../public/static/sermons.json`)
-	if (sermonJsonChanged) {
-		console.log(`Committing public/static/sermons.json`)
-		sh`git add ../public/static/sermons.json`
-	}
-
-	if (podcastFeedChanged || sermonJsonChanged) {
-		console.log(`Pushing...`)
-		sh`
-			git commit -m "Auto-commit"
-		`
-		console.log(`current branch is`, sh`git rev-parse --abbrev-ref HEAD --`)
-		if (botRevelationRepoUrl) {
-			sh`
-				git remote add bot ${ botRevelationRepoUrl }
-				git push bot master
-			`
-		} else {
-			sh`
-				git push
-			`
-		}
-	}
-}
-
-function trimToPropertiesThatNeedToBeDownloadedToClient(structure) {
-	return structure.map(({ title, passage, range, filename, date, audioId }) =>
-		({ title, passage, range, filename, date, audioId })
-	)
-}
-
-const rangeRegex = /"range": \[\s*\[\s*(\d+),\s*(\d+),\s*(\d+)\s*\],\s*\[\s*(\d+),\s*(\d+),\s*(\d+)\s*\]\s*\]/mg
-
-function toJson(structure) {
-	const json = JSON.stringify(structure, null, `\t`)
-	return json.replace(rangeRegex, (match, startChapter, startVerse, startSection, endChapter, endVerse, endSection) => `"range": [[${ startChapter },${ startVerse },${ startSection }], [${ endChapter },${ endVerse },${ endSection }]]`)
-}
-
-function print(structure) {
-	console.log(toJson(structure))
-}
-
-function save(structure) {
-	const json = toJson(structure)
-	require(`fs`).writeFileSync(`../public/static/sermons.json`, json)
-}
-
-function guaranteeRangeSections(sermons) {
-	return sermons.map(sermon => Object.assign({}, sermon, {
-		range: guaranteeRange([ sermon.range[0], sermon.range[1] ]),
-	}))
-}
-
-function nextSunday(date) {
-	if (isSunday(date)) {
-		return date
-	} else {
-		return nextSunday(addDays(date, 1))
-	}
-}
-
-function getLinesAdded(path) {
-	const output = sh`git diff --shortstat ${ path }`
-
-	return output ? parseInt(output.match(/ (\d+) insertion/)[1]) : 0
+	// TODO
+	// get the sermon IDs from the RSS feed, and insert them into the files' metadata
+	// This will have to run after both sides line up nicely with each other
 }
 
 main()
+
+const normalize = str => str
+	// .replace(/^he /, `The `)
+	.replace(/&/g, `and`)
+	.replace(/Pt\.?/g, `Part`)
+	// .toLowerCase()
+	.replace(/([- ][a-z])/g, (_, x) => x.toUpperCase())
+	// .replace(`sin and rebellion`, `sin`)
+	.replace(/[",]/g, ``)
+
+
+/*
+
+*/

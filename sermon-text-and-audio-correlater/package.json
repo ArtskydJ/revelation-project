@@ -1,21 +1,26 @@
 {
-  "name": "kc",
+  "name": "correlater",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node . && git diff --no-index feed-items.txt markdown-posts.txt | splitdiff"
   },
   "keywords": [],
   "author": "",
   "license": "WTFPL",
   "dependencies": {
+    "date-fns": "1.28.5",
     "got": "6.7.1",
     "level-mem": "0.18.0",
     "loud-rejection": "1.6.0",
     "noddity-butler": "2.6.2",
     "noddity-fs-retrieval": "1.1.0",
     "shell-tag": "1.0.1",
+    "then-denodeify": "1.0.1",
     "xml2js": "0.4.17"
+  },
+  "devDependencies": {
+    "splitdiff": "^0.1.3"
   }
 }
